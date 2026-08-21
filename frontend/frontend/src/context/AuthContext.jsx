@@ -20,7 +20,6 @@ export function AuthProvider({ children }) {
         setLoading(false);
         return;
       }
-
       try {
         const res = await api.getMe();
         setUser(res.user);
@@ -45,7 +44,6 @@ export function AuthProvider({ children }) {
     setIsAuthModalOpen(false);
     return res;
   };
-
   const register = async (userData) => {
     const res = await api.register(userData);
     setAuthToken(res.token);
@@ -54,22 +52,18 @@ export function AuthProvider({ children }) {
     setIsAuthModalOpen(false);
     return res;
   };
-
   const logout = () => {
     setAuthToken(null);
     setToken(null);
     setUser(null);
   };
-
   const openAuthModal = (mode = 'login') => {
     setAuthModalMode(mode);
     setIsAuthModalOpen(true);
   };
-
   const closeAuthModal = () => {
     setIsAuthModalOpen(false);
   };
-
   return (
     <AuthContext.Provider
       value={{
@@ -90,7 +84,6 @@ export function AuthProvider({ children }) {
     </AuthContext.Provider>
   );
 }
-
 export function useAuth() {
   return useContext(AuthContext);
 }
