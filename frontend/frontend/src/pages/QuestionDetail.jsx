@@ -1,173 +1,438 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
+import { useParams, Link } from 'react-router-dom';
 import { Tag } from '../components/ui/Tag';
 import { Avatar } from '../components/ui/Avatar';
 import { Button } from '../components/ui/Button';
-import { ChevronUp, ChevronDown, Bookmark, Check, Bold, Italic, Link as LinkIcon, Code, Image as ImageIcon } from 'lucide-react';
+import { ChevronUp, ChevronDown, Check, Bold, Italic, Link as LinkIcon, Code, Image as ImageIcon, MessageSquare, Loader2, Send } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { api } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
 
 export default function QuestionDetail() {
+  const { id } = useParams();
+  const { user, openAuthModal } = useAuth();
+
+  const [question, setQuestion] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  // New answer state
+  const [answerText, setAnswerText] = useState('');
+  const [submittingAnswer, setSubmittingAnswer] = useState(false);
+  const [answerError, setAnswerError] = useState(null);
+
+  // Comment input states per answer: { [answerId]: commentText }
+  const [commentInputs, setCommentInputs] = useState({});
+  const [activeCommentBox, setActiveCommentBox] = useState(null);
+  const [submittingComment, setSubmittingComment] = useState(false);
+
+  // Image upload state
+  const [uploadingImage, setUploadingImage] = useState(false);
+
+  const fetchQuestionDetails = async () => {
+    try {
+      const res = await api.getQuestionById(id);
+      setQuestion(res.question);
+    } catch (err) {
+      console.error('Error fetching question:', err);
+      setError(err.message || 'Question not found');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchQuestionDetails();
+  }, [id]);
+
+  // Handle Vote
+  const handleVote = async (answerId, voteType) => {
+    if (!user) {
+      openAuthModal('login');
+      return;
+    }
+
+    try {
+      const res = await api.voteAnswer(answerId, voteType);
+      setQuestion(prev => {
+        if (!prev) return prev;
+        const updatedAnswers = prev.answers.map(a => {
+          if (a.id === answerId) {
+            return {
+              ...a,
+              vote_score: res.vote_score,
+              upvotes: res.upvotes,
+              downvotes: res.downvotes,
+              user_vote: res.user_vote,
+            };
+          }
+          return a;
+        });
+        return { ...prev, answers: updatedAnswers };
+      });
+    } catch (err) {
+      alert(err.message || 'Failed to register vote.');
+    }
+  };
+
+  // Handle Accept Answer (Only question owner)
+  const handleAcceptAnswer = async (answerId) => {
+    if (!user) {
+      openAuthModal('login');
+      return;
+    }
+
+    try {
+      const res = await api.acceptAnswer(answerId);
+      setQuestion(prev => {
+        if (!prev) return prev;
+        const updatedAnswers = prev.answers.map(a => ({
+          ...a,
+          is_accepted: a.id === answerId ? res.is_accepted : false,
+        }));
+        return { ...prev, answers: updatedAnswers };
+      });
+    } catch (err) {
+      alert(err.message || 'Only the question owner can mark an answer as accepted.');
+    }
+  };
+
+  // Post Answer
+  const handlePostAnswer = async (e) => {
+    e.preventDefault();
+    if (!user) {
+      openAuthModal('login');
+      return;
+    }
+
+    if (!answerText.trim()) {
+      setAnswerError('Answer content cannot be empty.');
+      return;
+    }
+
+    setSubmittingAnswer(true);
+    setAnswerError(null);
+
+    try {
+      await api.postAnswer(id, { description: answerText.trim() });
+      setAnswerText('');
+      await fetchQuestionDetails(); // Refresh question & answers
+    } catch (err) {
+      setAnswerError(err.message || 'Failed to post answer.');
+    } finally {
+      setSubmittingAnswer(false);
+    }
+  };
+
+  // Post Comment
+  const handlePostComment = async (answerId) => {
+    if (!user) {
+      openAuthModal('login');
+      return;
+    }
+
+    const content = commentInputs[answerId] || '';
+    if (!content.trim()) return;
+
+    setSubmittingComment(true);
+    try {
+      await api.postComment(answerId, { content: content.trim() });
+      setCommentInputs(prev => ({ ...prev, [answerId]: '' }));
+      setActiveCommentBox(null);
+      await fetchQuestionDetails();
+    } catch (err) {
+      alert(err.message || 'Failed to post comment.');
+    } finally {
+      setSubmittingComment(false);
+    }
+  };
+
+  // Image Upload helper for Rich Text
+  const handleImageUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('image', file);
+
+    setUploadingImage(true);
+    try {
+      const res = await api.uploadImage(formData);
+      const imageTag = `<img src="${res.url}" alt="Uploaded Image" class="max-w-full h-auto rounded my-2" />`;
+      setAnswerText(prev => prev + '\n' + imageTag);
+    } catch (err) {
+      alert(err.message || 'Failed to upload image.');
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center p-20">
+        <Loader2 className="h-10 w-10 text-[#3b49df] animate-spin mb-2" />
+        <p className="text-xs text-[#64748b]">Loading question details...</p>
+      </div>
+    );
+  }
+
+  if (error || !question) {
+    return (
+      <div className="max-w-4xl mx-auto p-12 text-center bg-white rounded-lg border border-[#e2e8f0]">
+        <h2 className="text-xl font-bold text-red-600 mb-2">Question Not Found</h2>
+        <p className="text-xs text-[#64748b] mb-4">{error || 'The requested question could not be loaded.'}</p>
+        <Link to="/">
+          <Button variant="primary" size="sm">Back to Home</Button>
+        </Link>
+      </div>
+    );
+  }
+
+  const isQuestionOwner = user && user.id === question.author.id;
+
   return (
     <div className="max-w-4xl mx-auto pb-12">
+      {/* Question Header */}
       <div className="mb-6 pb-6 border-b border-[#e2e8f0]">
         <h1 className="text-2xl sm:text-3xl font-bold text-[#0f172a] mb-3 leading-snug">
-          How to properly implement a Custom Element with Shadow DOM?
+          {question.title}
         </h1>
-        <div className="flex flex-wrap items-center gap-4 text-sm text-[#475569]">
-          <div><span className="text-[#64748b] mr-1">Asked</span> today</div>
-          <div><span className="text-[#64748b] mr-1">Modified</span> today</div>
-          <div><span className="text-[#64748b] mr-1">Viewed</span> 42 times</div>
+        <div className="flex flex-wrap items-center gap-4 text-xs text-[#475569]">
+          <div>
+            <span className="text-[#64748b] mr-1">Asked</span>{' '}
+            {new Date(question.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+          </div>
+          <div>
+            <span className="text-[#64748b] mr-1">Author</span>{' '}
+            <span className="font-semibold text-[#0f172a]">@{question.author.username}</span>
+          </div>
         </div>
       </div>
 
-      {/* Question */}
+      {/* Question Content */}
       <div className="flex gap-4 mb-8">
-        <div className="flex flex-col items-center gap-2 w-12 shrink-0">
-          <button className="text-[#94a3b8] hover:text-[#3b49df]"><ChevronUp className="h-8 w-8" /></button>
-          <div className="text-xl font-bold text-[#0f172a]">15</div>
-          <button className="text-[#94a3b8] hover:text-[#3b49df]"><ChevronDown className="h-8 w-8" /></button>
-          <button className="text-[#94a3b8] hover:text-[#3b49df] mt-2"><Bookmark className="h-5 w-5" /></button>
-        </div>
-        <div className="flex-1 min-w-0 bg-white rounded-lg border border-[#e2e8f0] p-6 shadow-sm">
-          <div className="prose prose-sm sm:prose-base max-w-none text-[#334155]">
-            <p>I am trying to create a reusable custom element for my web application using standard Web Components APIs. Specifically, I want to encapsulate the styles so they don't leak out, and prevent global styles from leaking in.</p>
-            <p>Here is what I have so far:</p>
-            <pre className="bg-[#f8fafc] p-4 rounded-md overflow-x-auto border border-[#e2e8f0] text-[13px] text-[#0f172a]"><code>{`class MyComponent extends HTMLElement {
-  constructor() {
-    super();
-    // I think I need to attach shadow DOM here?
-  }
+        <div className="flex-1 min-w-0 bg-white rounded-lg border border-[#e2e8f0] p-6 shadow-2xs">
+          <div 
+            className="prose prose-sm sm:prose-base max-w-none text-[#334155]"
+            dangerouslySetInnerHTML={{ __html: question.description }}
+          />
+          
+          <div className="mt-6 flex flex-wrap gap-1.5">
+            {question.tags.map((t) => (
+              <Link key={t.id || t.name} to={`/?tag=${encodeURIComponent(t.name)}`}>
+                <Tag>{t.name}</Tag>
+              </Link>
+            ))}
+          </div>
 
-  connectedCallback() {
-    this.innerHTML = '<div class="wrapper">Hello World</div>';
-  }
-}
-customElements.define('my-component', MyComponent);`}</code></pre>
-            <p>When I do this, standard CSS classes from my main stylesheet still affect the <code>.wrapper</code> div. What is the correct pattern to use <code>attachShadow</code> and encapsulate the template?</p>
-          </div>
-          
-          <div className="mt-6 flex flex-wrap gap-2">
-            <Tag>javascript</Tag>
-            <Tag>html</Tag>
-            <Tag>web-components</Tag>
-            <Tag>shadow-dom</Tag>
-          </div>
-          
           <div className="mt-6 flex justify-end">
-            <div className="bg-[#f8fafc] rounded p-3 flex flex-col gap-1 text-xs border border-[#e2e8f0]">
-              <div className="text-[#64748b]">asked Oct 24 at 10:30</div>
+            <div className="bg-[#f8fafc] rounded-md p-3 flex flex-col gap-1 text-xs border border-[#e2e8f0]">
+              <div className="text-[#64748b]">
+                asked {new Date(question.created_at).toLocaleString()}
+              </div>
               <div className="flex items-center gap-2 mt-1">
-                <Avatar src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=150&auto=format&fit=crop" alt="dev_asker" className="h-8 w-8 rounded" />
-                <span className="font-medium text-[#2563eb]">dev_asker</span>
+                <Avatar alt={question.author.username} className="h-7 w-7 bg-[#3b49df] text-white font-bold text-xs" />
+                <span className="font-semibold text-[#2563eb]">@{question.author.username}</span>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Answers Header */}
+      {/* Answers Section */}
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-bold text-[#0f172a]">2 Answers</h2>
-        <div className="text-sm text-[#475569]">
-          Highest score (default)
-        </div>
+        <h2 className="text-xl font-bold text-[#0f172a]">
+          {question.answers.length} {question.answers.length === 1 ? 'Answer' : 'Answers'}
+        </h2>
       </div>
 
-      {/* Answer 1 (Accepted) */}
-      <div className="flex gap-4 mb-6">
-        <div className="flex flex-col items-center gap-2 w-12 shrink-0">
-          <button className="text-[#94a3b8] hover:text-[#3b49df]"><ChevronUp className="h-8 w-8" /></button>
-          <div className="text-xl font-bold text-[#0f172a]">42</div>
-          <button className="text-[#94a3b8] hover:text-[#3b49df]"><ChevronDown className="h-8 w-8" /></button>
-          <div className="text-[#10b981] mt-2"><Check className="h-8 w-8" strokeWidth={3} /></div>
-        </div>
-        <div className="flex-1 min-w-0 bg-white rounded-lg border-2 border-[#10b981]/40 p-6 shadow-sm relative">
-          <div className="absolute top-0 right-0 bg-[#d1fae5] text-[#065f46] text-xs font-semibold px-3 py-1 rounded-bl-lg rounded-tr flex items-center gap-1 border-b border-l border-[#10b981]/40">
-            <Check className="h-3.5 w-3.5" /> Accepted
-          </div>
-          
-          <div className="prose prose-sm sm:prose-base max-w-none text-[#334155] mt-2">
-            <p>To encapsulate your component using Shadow DOM, you need to call <code>this.attachShadow(&#123; mode: 'open' &#125;)</code> inside your constructor, and then append your content to the resulting <code>shadowRoot</code>.</p>
-            <p>Here is the corrected implementation:</p>
-            <pre className="bg-[#f8fafc] p-4 rounded-md overflow-x-auto border border-[#e2e8f0] text-[13px] text-[#0f172a]"><code>{`class MyComponent extends HTMLElement {
-  constructor() {
-    super();
-    // Create the shadow root
-    this.attachShadow({ mode: 'open' });
-  }
+      {/* Answers List */}
+      <div className="space-y-6 mb-10">
+        {question.answers.map((answer) => (
+          <div key={answer.id} className="flex gap-4">
+            {/* Voting & Accepted controls */}
+            <div className="flex flex-col items-center gap-1 w-12 shrink-0">
+              <button 
+                onClick={() => handleVote(answer.id, 'UPVOTE')}
+                className={cn(
+                  'p-1 rounded hover:bg-[#eef2ff] transition-colors',
+                  answer.user_vote === 'UPVOTE' ? 'text-[#3b49df] font-bold' : 'text-[#94a3b8] hover:text-[#3b49df]'
+                )}
+                title="Upvote"
+              >
+                <ChevronUp className="h-8 w-8" />
+              </button>
+              <div className="text-lg font-bold text-[#0f172a]">{answer.vote_score}</div>
+              <button 
+                onClick={() => handleVote(answer.id, 'DOWNVOTE')}
+                className={cn(
+                  'p-1 rounded hover:bg-[#eef2ff] transition-colors',
+                  answer.user_vote === 'DOWNVOTE' ? 'text-[#3b49df] font-bold' : 'text-[#94a3b8] hover:text-[#3b49df]'
+                )}
+                title="Downvote"
+              >
+                <ChevronDown className="h-8 w-8" />
+              </button>
 
-  connectedCallback() {
-    // Append styles and structure to the shadowRoot, not the element itself
-    this.shadowRoot.innerHTML = \`
-      <style>
-        .wrapper {
-          color: blue;
-          padding: 10px;
-          border: 1px solid #ccc;
-        }
-      </style>
-      <div class="wrapper">Hello Encapsulated World</div>
-    \`;
-  }
-}
-customElements.define('my-component', MyComponent);`}</code></pre>
-            <p>By doing this, any global styles targeting <code>.wrapper</code> will <strong>not</strong> affect the div inside your component, and the <code>color: blue</code> rule will <strong>not</strong> bleed out to other elements on your page.</p>
-          </div>
-          
-          <div className="mt-6 flex justify-end">
-            <div className="bg-[#f8fafc] rounded p-3 flex flex-col gap-1 text-xs border border-[#e2e8f0]">
-              <div className="text-[#64748b]">answered Oct 24 at 11:15</div>
-              <div className="flex items-center gap-2 mt-1">
-                <Avatar src="https://images.unsplash.com/photo-1438761681033-6461ffad8d80?q=80&w=150&auto=format&fit=crop" alt="sarah_codes" className="h-8 w-8 rounded" />
-                <span className="font-medium text-[#2563eb]">sarah_codes</span>
+              {/* Accept toggle button */}
+              {(isQuestionOwner || answer.is_accepted) && (
+                <button
+                  onClick={() => isQuestionOwner && handleAcceptAnswer(answer.id)}
+                  disabled={!isQuestionOwner}
+                  className={cn(
+                    'mt-2 p-1.5 rounded-full transition-all',
+                    answer.is_accepted 
+                      ? 'bg-[#10b981] text-white shadow-sm' 
+                      : 'text-[#cbd5e1] hover:text-[#10b981] hover:bg-emerald-50'
+                  )}
+                  title={answer.is_accepted ? 'Accepted Answer' : 'Mark as Accepted'}
+                >
+                  <Check className="h-6 w-6" strokeWidth={3} />
+                </button>
+              )}
+            </div>
+
+            {/* Answer Body */}
+            <div className={cn(
+              'flex-1 min-w-0 bg-white rounded-lg border p-6 shadow-2xs relative',
+              answer.is_accepted ? 'border-2 border-[#10b981]' : 'border-[#e2e8f0]'
+            )}>
+              {answer.is_accepted && (
+                <div className="absolute top-0 right-0 bg-[#d1fae5] text-[#065f46] text-xs font-semibold px-3 py-1 rounded-bl-lg rounded-tr flex items-center gap-1">
+                  <Check className="h-3.5 w-3.5" /> Accepted Answer
+                </div>
+              )}
+
+              <div 
+                className="prose prose-sm sm:prose-base max-w-none text-[#334155] mt-1"
+                dangerouslySetInnerHTML={{ __html: answer.description }}
+              />
+
+              <div className="mt-6 flex justify-end">
+                <div className="bg-[#f8fafc] rounded-md p-3 flex flex-col gap-1 text-xs border border-[#e2e8f0]">
+                  <div className="text-[#64748b]">
+                    answered {new Date(answer.created_at).toLocaleString()}
+                  </div>
+                  <div className="flex items-center gap-2 mt-1">
+                    <Avatar alt={answer.author.username} className="h-7 w-7 bg-[#10b981] text-white font-bold text-xs" />
+                    <span className="font-semibold text-[#2563eb]">@{answer.author.username}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Comments Section */}
+              <div className="mt-6 pt-4 border-t border-[#f1f5f9]">
+                <div className="space-y-2 mb-3">
+                  {answer.comments.map((comment) => (
+                    <div key={comment.id} className="text-xs text-[#334155] bg-[#f8fafc] p-2.5 rounded border border-[#e2e8f0] flex justify-between gap-2">
+                      <span>{comment.content}</span>
+                      <span className="text-[#64748b] shrink-0 font-medium">— @{comment.author.username}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {activeCommentBox === answer.id ? (
+                  <div className="flex gap-2 mt-2">
+                    <input
+                      type="text"
+                      placeholder="Add a comment... (use @username to notify)"
+                      value={commentInputs[answer.id] || ''}
+                      onChange={(e) => setCommentInputs({ ...commentInputs, [answer.id]: e.target.value })}
+                      className="flex-1 text-xs border border-[#cbd5e1] rounded px-3 py-1.5 focus:outline-none focus:border-[#3b49df]"
+                    />
+                    <Button 
+                      size="sm" 
+                      onClick={() => handlePostComment(answer.id)}
+                      disabled={submittingComment}
+                      className="text-xs py-1"
+                    >
+                      {submittingComment ? 'Posting...' : 'Comment'}
+                    </Button>
+                    <Button 
+                      size="sm" 
+                      variant="outline"
+                      onClick={() => setActiveCommentBox(null)}
+                      className="text-xs py-1"
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
+                  <button 
+                    onClick={() => {
+                      if (!user) return openAuthModal('login');
+                      setActiveCommentBox(answer.id);
+                    }}
+                    className="text-xs text-[#64748b] hover:text-[#3b49df] flex items-center gap-1 font-medium mt-1"
+                  >
+                    <MessageSquare className="h-3.5 w-3.5" /> Add a comment
+                  </button>
+                )}
               </div>
             </div>
           </div>
-        </div>
+        ))}
       </div>
 
-      {/* Answer 2 */}
-      <div className="flex gap-4 mb-10">
-        <div className="flex flex-col items-center gap-2 w-12 shrink-0">
-          <button className="text-[#94a3b8] hover:text-[#3b49df]"><ChevronUp className="h-8 w-8" /></button>
-          <div className="text-xl font-bold text-[#0f172a]">8</div>
-          <button className="text-[#94a3b8] hover:text-[#3b49df]"><ChevronDown className="h-8 w-8" /></button>
-        </div>
-        <div className="flex-1 min-w-0 bg-white rounded-lg border border-[#e2e8f0] p-6 shadow-sm">
-          <div className="prose prose-sm sm:prose-base max-w-none text-[#334155]">
-            <p>While <code>innerHTML</code> works fine for simple components, if you are building something more complex, you should look into using the <code>&lt;template&gt;</code> tag.</p>
-            <p>It's generally more performant because the browser parses the template once, and you can just clone the node when your component connects.</p>
-          </div>
-          
-          <div className="mt-6 flex justify-end">
-            <div className="bg-[#f8fafc] rounded p-3 flex flex-col gap-1 text-xs border border-[#e2e8f0]">
-              <div className="text-[#64748b]">answered Oct 24 at 12:40</div>
-              <div className="flex items-center gap-2 mt-1">
-                <Avatar src="https://images.unsplash.com/photo-1599566150163-29194dcaad36?q=80&w=150&auto=format&fit=crop" alt="template_master" className="h-8 w-8 rounded" />
-                <span className="font-medium text-[#2563eb]">template_master</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Your Answer */}
+      {/* Post Your Answer Form */}
       <div className="pt-6 border-t border-[#e2e8f0]">
         <h2 className="text-xl font-bold text-[#0f172a] mb-4">Your Answer</h2>
-        <div className="rounded-lg border border-[#e2e8f0] bg-white shadow-sm overflow-hidden flex flex-col mb-4">
-          <div className="bg-[#f8fafc] border-b border-[#e2e8f0] flex items-center px-4 py-2 gap-2">
-            <button className="p-1.5 text-[#475569] hover:bg-[#e2e8f0] rounded transition-colors"><Bold className="h-4 w-4" /></button>
-            <button className="p-1.5 text-[#475569] hover:bg-[#e2e8f0] rounded transition-colors"><Italic className="h-4 w-4" /></button>
-            <div className="w-px h-5 bg-[#cbd5e1] mx-1"></div>
-            <button className="p-1.5 text-[#475569] hover:bg-[#e2e8f0] rounded transition-colors"><LinkIcon className="h-4 w-4" /></button>
-            <button className="p-1.5 text-[#475569] hover:bg-[#e2e8f0] rounded transition-colors"><Code className="h-4 w-4" /></button>
-            <button className="p-1.5 text-[#475569] hover:bg-[#e2e8f0] rounded transition-colors"><ImageIcon className="h-4 w-4" /></button>
+        
+        {answerError && (
+          <div className="mb-4 p-3 text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded-md">
+            {answerError}
           </div>
-          <textarea 
-            className="w-full min-h-[250px] p-4 text-sm focus:outline-none resize-y" 
-            placeholder="Write your detailed answer here..."
-          ></textarea>
-        </div>
-        <Button variant="primary">Post Your Answer</Button>
+        )}
+
+        <form onSubmit={handlePostAnswer}>
+          <div className="rounded-lg border border-[#e2e8f0] bg-white shadow-2xs overflow-hidden flex flex-col mb-4">
+            <div className="bg-[#f8fafc] border-b border-[#e2e8f0] flex items-center px-4 py-2 gap-2">
+              <button 
+                type="button"
+                onClick={() => setAnswerText(prev => prev + '<strong>Bold</strong>')}
+                className="p-1.5 text-[#475569] hover:bg-[#e2e8f0] rounded transition-colors" 
+                title="Bold"
+              >
+                <Bold className="h-4 w-4" />
+              </button>
+              <button 
+                type="button"
+                onClick={() => setAnswerText(prev => prev + '<em>Italic</em>')}
+                className="p-1.5 text-[#475569] hover:bg-[#e2e8f0] rounded transition-colors" 
+                title="Italic"
+              >
+                <Italic className="h-4 w-4" />
+              </button>
+              <div className="w-px h-5 bg-[#cbd5e1] mx-1"></div>
+              <button 
+                type="button"
+                onClick={() => setAnswerText(prev => prev + '<pre><code>// Code snippet</code></pre>')}
+                className="p-1.5 text-[#475569] hover:bg-[#e2e8f0] rounded transition-colors" 
+                title="Code block"
+              >
+                <Code className="h-4 w-4" />
+              </button>
+              
+              {/* Image Upload Button */}
+              <label className="p-1.5 text-[#475569] hover:bg-[#e2e8f0] rounded transition-colors cursor-pointer" title="Upload Image">
+                <ImageIcon className="h-4 w-4" />
+                <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+              </label>
+              {uploadingImage && <span className="text-xs text-[#3b49df]">Uploading image...</span>}
+            </div>
+            
+            <textarea 
+              value={answerText}
+              onChange={(e) => setAnswerText(e.target.value)}
+              className="w-full min-h-[200px] p-4 text-sm focus:outline-none resize-y" 
+              placeholder="Write your detailed answer here... (HTML or plain text supported, use @username to mention someone)"
+            ></textarea>
+          </div>
+
+          <Button type="submit" variant="primary" disabled={submittingAnswer} className="flex items-center gap-1.5">
+            <Send className="h-4 w-4" /> {submittingAnswer ? 'Posting...' : 'Post Your Answer'}
+          </Button>
+        </form>
       </div>
     </div>
   );
