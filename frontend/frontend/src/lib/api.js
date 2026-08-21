@@ -1,6 +1,6 @@
 // API Helper client connecting to StackIt Backend
 
-const API_BASE_URL = '/api';
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 export function getAuthToken() {
   return localStorage.getItem('stackit_token');
